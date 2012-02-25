@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -16,6 +17,11 @@ public class Server {
     static ArrayList<ClientConnection> connectedClients;
 
     private static void sendMessageToAllClients(String Message) {
+
+        //Prints the Message in the Server Console
+        System.out.println(Message);
+
+        //Loop through all Connected Clients and Send Each of them the Message
         for (ClientConnection currentClient : connectedClients) {
             currentClient.sendMessageToClient(Message);
         }
@@ -23,29 +29,33 @@ public class Server {
 
     public static boolean requestNewUser(ClientConnection user) {
         for (ClientConnection currentClient : connectedClients) {
-            if (currentClient.name.equals(user.name)) {
+            if (currentClient.getUserName().equals(user.getUserName())) {
                 user.sendMessageToClient("Sorry Your Username is already taken");
                 user.sendMessageToClient("Disconnected");
                 return false;
             }
         }
-        
-        System.out.println("User " + user.name + " connected from IP " + user.clientSocket.getInetAddress());
-        
+
+        System.out.println("User " + user.getUserName() + " connected from IP " + user.getClientSocket().getInetAddress());
+
         connectedClients.add(user);
         return true;
 
     }
 
-    public static void disconnectUser(ClientConnection user) {
-        
-        user.sendMessageToClient("Disconnected");
+    public static void removeUser(ClientConnection user) {
         user.closeConnections();
         connectedClients.remove(user);
+    }
 
-        System.out.println(user.name + " has left.");
-        
-        Server.notifyLeaveUser(user.name);
+    public static void disconnectUser(ClientConnection user) {
+
+        user.sendMessageToClient("Disconnected");
+
+        removeUser(user);
+
+        System.out.println(user.getUserName() + " has left.");
+        Server.notifyLeaveUser(user.getUserName());
 
     }
 
@@ -58,14 +68,24 @@ public class Server {
     }
 
     public static void sendToAll(ClientConnection sender, String Message) {
-        sendMessageToAllClients("<" + sender.name + "> " + Message);
+        sendMessageToAllClients("<" + sender.getUserName() + "> " + Message);
     }
 
     public static void main(String args[]) {
 
         // The default port
-
         int port_number = 2222;
+
+
+        //Check all arguments if port is given. If so parse the port argument.
+        // How to call Example: java -jar server.jar -port 1337
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("-port")) {
+                port_number = Integer.parseInt(args[i + 1]);
+            }
+        }
+
+
 
         System.out.println("Starting server.\n" + "Listening to Port: " + port_number);
 
@@ -82,9 +102,9 @@ public class Server {
 
             try {
                 clientSocket = serverSocket.accept(); //Thread halts untli accept occurs
-                
+
                 System.out.println("New Connection from " + clientSocket.getInetAddress());
-                
+
                 ClientConnection newClient = new ClientConnection(clientSocket);
                 newClient.start();
 
@@ -97,10 +117,10 @@ public class Server {
 
 class ClientConnection extends Thread {
 
-    DataInputStream is = null;
-    PrintStream os = null;
-    Socket clientSocket = null;
-    String name = null;
+    private DataInputStream _fromClientStream = null;
+    private PrintStream _toClientStream = null;
+    private Socket clientSocket = null;
+    private String userName = null;
 
     public ClientConnection(Socket clientSocket) {
         this.clientSocket = clientSocket;
@@ -109,16 +129,16 @@ class ClientConnection extends Thread {
     private void sendMessageToServer(String message) {
         Server.sendToAll(this, message);
     }
-    
+
     public void sendMessageToClient(String message) {
-        this.os.println(message);
+        this._toClientStream.println(message);
     }
 
     public void closeConnections() {
         try {
-            this.is.close();
-            this.os.close();
-            this.clientSocket.close();
+            this._fromClientStream.close();
+            this._toClientStream.close();
+            this.getClientSocket().close();
         } catch (IOException ex) {
             Logger.getLogger(ClientConnection.class.getName()).log(Level.SEVERE, null, ex);
         }
@@ -128,31 +148,61 @@ class ClientConnection extends Thread {
     public void run() {
         String line;
         try {
-            is = new DataInputStream(clientSocket.getInputStream());
-            os = new PrintStream(clientSocket.getOutputStream());
+            _fromClientStream = new DataInputStream(getClientSocket().getInputStream());
+            _toClientStream = new PrintStream(getClientSocket().getOutputStream());
 
-            this.sendMessageToClient("Please your name:");
+            this.sendMessageToClient("Please Enter your name:");
 
-            this.name = is.readLine();
+            this.setUserName(_fromClientStream.readLine());
 
             if (!Server.requestNewUser(this)) {
-                
+
                 this.closeConnections();
                 return;
             }
 
-            Server.notifyNewUser(this.name);
+            Server.notifyNewUser(this.getUserName());
 
             while (true) {
-                line = is.readLine();
-                if (line.startsWith("/quit")) {
-                    break;
+                try {
+                    line = _fromClientStream.readLine();
+                    if (line.startsWith("/quit")) {
+                        break;
+                    }
+                    sendMessageToServer(line);
+                } catch (SocketException e) {
+                    //Exception occured so Disconnect User!
+                    Server.removeUser(this);
+                    //Logger.getLogger(Server.class.getName()).log(Level.SEVERE, null, e);
                 }
-                sendMessageToServer(line);
             }
+
             Server.disconnectUser(this);
         } catch (IOException e) {
+            //Exception occured so Disconnect User!
+            Server.removeUser(this);
             Logger.getLogger(Server.class.getName()).log(Level.SEVERE, null, e);
         }
+    }
+
+    /**
+     * @return the userName
+     */
+    public String getUserName() {
+        return userName;
+    }
+
+    /**
+     * @param userName the userName to set
+     */
+    private void setUserName(String userName) {
+        this.userName = userName;
+    }
+
+    /**
+     * @return the clientSocket
+     */
+    public Socket getClientSocket() {
+        return clientSocket;
     }
 }
